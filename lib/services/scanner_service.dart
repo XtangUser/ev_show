@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../models/environment_info.dart';
 
 /// 单条扫描命令定义
 class ScanCommand {
@@ -19,11 +20,13 @@ class ScanCommand {
 class ScanDefinition {
   final String id;
   final List<ScanCommand> commands; // 按顺序尝试，第一个成功则停止
+  final Future<ScanResult?> Function()? customScanFn; // 自定义扫描逻辑
   final Future<Map<String, String>?> Function()? extraInfoFn; // 额外信息采集
 
   const ScanDefinition({
     required this.id,
     required this.commands,
+    this.customScanFn,
     this.extraInfoFn,
   });
 }
@@ -35,6 +38,7 @@ class ScanResult {
   final String? path;
   final String? error;
   final Map<String, String>? extra;
+  final List<ToolInstance>? instances;
 
   const ScanResult({
     required this.found,
@@ -42,6 +46,7 @@ class ScanResult {
     this.path,
     this.error,
     this.extra,
+    this.instances,
   });
 }
 
@@ -478,6 +483,7 @@ class ScannerService {
           versionPattern: RegExp(r'(\d+\.\d+[\.\d]*)'),
         ),
       ],
+      customScanFn: () => _getMysqlScan(),
     ),
 
     'psql': ScanDefinition(
@@ -511,6 +517,7 @@ class ScannerService {
           versionPattern: RegExp(r'v=(\d+\.\d+[\.\d]*)'),
         ),
       ],
+      customScanFn: () => _getRedisScan(),
     ),
 
     'sqlite': ScanDefinition(
@@ -680,6 +687,7 @@ class ScannerService {
   // 运行单个扫描
   // ──────────────────────────────────────────────
   static Future<ScanResult> _runScan(ScanDefinition def) async {
+    // 1. 尝试常规命令
     for (final cmd in def.commands) {
       try {
         final result = await Process.run(
@@ -729,6 +737,16 @@ class ScannerService {
         // 当前命令失败，尝试下一个
         continue;
       }
+    }
+
+    // 2. 如果常规命令失败，尝试自定义扫描逻辑
+    if (def.customScanFn != null) {
+      try {
+        final customRes = await def.customScanFn!();
+        if (customRes != null && customRes.found) {
+          return customRes;
+        }
+      } catch (_) {}
     }
 
     return const ScanResult(found: false);
@@ -951,5 +969,187 @@ class ScannerService {
     } catch (_) {
       return null;
     }
+  }
+
+  static Future<ScanResult?> _getMysqlScan() async {
+    if (!Platform.isWindows) return null;
+
+    try {
+      // 1. 查找所有带有 MySQL 关键字的服务
+      final result = await Process.run('sc.exe', ['query', 'state=', 'all'], runInShell: true)
+          .timeout(const Duration(seconds: 10));
+
+      if (result.exitCode != 0) return null;
+
+      final out = result.stdout as String;
+      final serviceNames = RegExp(r'SERVICE_NAME:\s+(MySQL\S*)', caseSensitive: false)
+          .allMatches(out)
+          .map((m) => m.group(1)!)
+          .toList();
+
+      if (serviceNames.isEmpty) return null;
+
+      final instances = <ToolInstance>[];
+
+      for (final name in serviceNames) {
+        try {
+          final qcResult = await Process.run('sc.exe', ['qc', name], runInShell: true)
+              .timeout(const Duration(seconds: 5));
+
+          if (qcResult.exitCode == 0) {
+            final qcOut = qcResult.stdout as String;
+            final match = RegExp(r'BINARY_PATH_NAME\s+:\s+(.*)').firstMatch(qcOut);
+            if (match != null) {
+              var binPath = match.group(1)!.trim();
+              // 处理带引号的路径
+              if (binPath.startsWith('"')) {
+                final endQuote = binPath.indexOf('"', 1);
+                if (endQuote != -1) binPath = binPath.substring(1, endQuote);
+              } else {
+                // 处理带参数的情况
+                final firstSpace = binPath.indexOf(' ');
+                if (firstSpace != -1) binPath = binPath.substring(0, firstSpace);
+              }
+
+              String? version;
+              try {
+                // 尝试 mysqld 或 mysql 获取版本
+                final mysqlExe = binPath.toLowerCase().contains('mysqld')
+                    ? binPath.replaceAll('mysqld', 'mysql')
+                    : binPath;
+
+                var vRes = await Process.run(mysqlExe, ['--version'], runInShell: true)
+                    .timeout(const Duration(seconds: 5));
+
+                if (vRes.exitCode != 0) {
+                  vRes = await Process.run(binPath, ['--version'], runInShell: true)
+                      .timeout(const Duration(seconds: 5));
+                }
+
+                if (vRes.exitCode == 0) {
+                  version = _extractVersion(vRes.stdout as String, null);
+                }
+              } catch (_) {}
+
+              instances.add(ToolInstance(
+                version: version ?? '未知版本',
+                path: binPath,
+                name: name,
+              ));
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (instances.isNotEmpty) {
+        // 按版本号降序排序，最新的排前面
+        instances.sort((a, b) => b.version.compareTo(a.version));
+
+        return ScanResult(
+          found: true,
+          version: instances.length > 1
+              ? '${instances.first.version} (等 ${instances.length} 个实例)'
+              : instances.first.version,
+          path: instances.first.path,
+          instances: instances,
+          extra: {
+            '总实例数': '${instances.length} 个',
+            '服务列表': serviceNames.join('、'),
+          },
+        );
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<ScanResult?> _getRedisScan() async {
+    if (!Platform.isWindows) return null;
+
+    try {
+      // 1. 查找所有带有 Redis 关键字的服务
+      final result = await Process.run('sc.exe', ['query', 'state=', 'all'], runInShell: true)
+          .timeout(const Duration(seconds: 10));
+
+      if (result.exitCode != 0) return null;
+
+      final out = result.stdout as String;
+      final serviceNames = RegExp(r'SERVICE_NAME:\s+(Redis\S*)', caseSensitive: false)
+          .allMatches(out)
+          .map((m) => m.group(1)!)
+          .where((name) => !name.toLowerCase().contains('redist')) // 排除 RedistService
+          .toList();
+
+      if (serviceNames.isEmpty) return null;
+
+      final instances = <ToolInstance>[];
+
+      for (final name in serviceNames) {
+        try {
+          final qcResult = await Process.run('sc.exe', ['qc', name], runInShell: true)
+              .timeout(const Duration(seconds: 5));
+
+          if (qcResult.exitCode == 0) {
+            final qcOut = qcResult.stdout as String;
+            final match = RegExp(r'BINARY_PATH_NAME\s+:\s+(.*)').firstMatch(qcOut);
+            if (match != null) {
+              var binPath = match.group(1)!.trim();
+              // 处理带引号的路径
+              if (binPath.startsWith('"')) {
+                final endQuote = binPath.indexOf('"', 1);
+                if (endQuote != -1) binPath = binPath.substring(1, endQuote);
+              } else {
+                // 处理带参数的情况
+                final firstSpace = binPath.indexOf(' ');
+                if (firstSpace != -1) binPath = binPath.substring(0, firstSpace);
+              }
+
+              String? version;
+              try {
+                // 尝试 redis-server 获取版本
+                final dir = File(binPath).parent.path;
+                final redisServerExe = '$dir\\redis-server.exe';
+
+                var vRes = await Process.run(redisServerExe, ['--version'], runInShell: true)
+                    .timeout(const Duration(seconds: 5));
+
+                if (vRes.exitCode != 0) {
+                  // 如果没有 redis-server.exe，尝试直接运行服务文件（有些发行版 RedisService.exe 就是 redis-server）
+                  vRes = await Process.run(binPath, ['--version'], runInShell: true)
+                      .timeout(const Duration(seconds: 5));
+                }
+
+                if (vRes.exitCode == 0) {
+                  version = _extractVersion(vRes.stdout as String, RegExp(r'v=(\d+\.\d+[\.\d]*)'));
+                }
+              } catch (_) {}
+
+              instances.add(ToolInstance(
+                version: version ?? '未知版本',
+                path: binPath,
+                name: name,
+              ));
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (instances.isNotEmpty) {
+        instances.sort((a, b) => b.version.compareTo(a.version));
+
+        return ScanResult(
+          found: true,
+          version: instances.length > 1
+              ? '${instances.first.version} (等 ${instances.length} 个实例)'
+              : instances.first.version,
+          path: instances.first.path,
+          instances: instances,
+          extra: {
+            '总实例数': '${instances.length} 个',
+            '服务列表': serviceNames.join('、'),
+          },
+        );
+      }
+    } catch (_) {}
+    return null;
   }
 }

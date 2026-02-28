@@ -55,6 +55,21 @@ enum ScanStatus {
   error, // 出错
 }
 
+/// 单个工具实例（用于支持多版本/多安装路径）
+class ToolInstance {
+  final String version;
+  final String path;
+  final String? name; // 实例名称，如服务名、虚拟环境名等
+  final Map<String, String>? extra;
+
+  const ToolInstance({
+    required this.version,
+    required this.path,
+    this.name,
+    this.extra,
+  });
+}
+
 /// 单个环境信息
 class EnvironmentInfo {
   final String id;
@@ -70,6 +85,7 @@ class EnvironmentInfo {
   String? executablePath;
   String? errorMessage;
   Map<String, String>? extra; // 附加信息，如conda环境列表
+  List<ToolInstance>? instances; // 发现的多个实例
   DateTime? scannedAt;
 
   EnvironmentInfo({
@@ -85,6 +101,7 @@ class EnvironmentInfo {
     this.executablePath,
     this.errorMessage,
     this.extra,
+    this.instances,
     this.scannedAt,
   });
 
@@ -123,6 +140,7 @@ class EnvironmentInfo {
     String? executablePath,
     String? errorMessage,
     Map<String, String>? extra,
+    List<ToolInstance>? instances,
     DateTime? scannedAt,
   }) {
     return EnvironmentInfo(
@@ -138,6 +156,7 @@ class EnvironmentInfo {
       executablePath: executablePath ?? this.executablePath,
       errorMessage: errorMessage ?? this.errorMessage,
       extra: extra ?? this.extra,
+      instances: instances ?? this.instances,
       scannedAt: scannedAt ?? this.scannedAt,
     );
   }

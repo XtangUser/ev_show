@@ -236,8 +236,91 @@ class _InfoCard extends StatelessWidget {
                 cs,
                 color: Colors.orange,
               ),
+
+            // ── 多实例信息 ──
+            if (info.instances != null && info.instances!.length > 1) ...[
+              const SizedBox(height: 16),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.account_tree_outlined, size: 16, color: cs.secondary),
+                  const SizedBox(width: 6),
+                  Text(
+                    '发现多个实例 (${info.instances!.length})',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: cs.secondary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ...info.instances!.map((instance) => _buildInstanceRow(instance, theme, cs)),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildInstanceRow(ToolInstance instance, ThemeData theme, ColorScheme cs) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (instance.name != null) ...[
+                Text(
+                  instance.name!,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: cs.onSurface,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  instance.version,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: cs.primary,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(Icons.folder_open, size: 12, color: cs.onSurfaceVariant),
+              const SizedBox(width: 4),
+              Expanded(
+                child: SelectableText(
+                  instance.path,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontSize: 11,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
