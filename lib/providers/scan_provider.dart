@@ -125,6 +125,7 @@ class ScanProvider extends ChangeNotifier {
         executablePath: result.path,
         errorMessage: result.error,
         extra: result.extra,
+        instances: result.instances,
         scannedAt: DateTime.now(),
       );
     } catch (e) {
